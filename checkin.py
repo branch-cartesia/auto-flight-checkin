@@ -158,19 +158,24 @@ def _delta_checkin_flow(page, confirmation, first_name, last_name, dry_run):
 
     log.info("Check-in page loaded successfully")
 
-    # Step 3: Fill confirmation number
-    # The PCCOciWeb Angular app uses #inputConfirmation / name='recordLocator'
+    # Step 3: Wait for the Angular form to render, then fill confirmation
+    # Wait for the confirmation input to appear (up to 15s)
     conf_filled = False
-    conf_selectors = [
+    try:
+        page.wait_for_selector("#inputConfirmation, input[name='recordLocator']",
+                               state="visible", timeout=15000)
+    except Exception:
+        pass  # Fall through to selector loop
+
+    for sel in [
         "#inputConfirmation",
         "input[name='recordLocator']",
         "input[name='confirmationNumber']",
         "#confirmation",
-    ]
-    for sel in conf_selectors:
+    ]:
         try:
             elem = page.locator(sel)
-            if elem.count() > 0 and elem.first.is_visible():
+            if elem.count() > 0 and elem.first.is_visible(timeout=1000):
                 elem.first.click()
                 elem.first.fill(confirmation.upper())
                 conf_filled = True
@@ -280,13 +285,36 @@ def _delta_checkin_flow(page, confirmation, first_name, last_name, dry_run):
     result_text = page.inner_text("body").lower()
 
     # Step 7: Handle the result
-    # Check for validation errors (expected for fake confirmations)
+    # Extract any visible error/alert messages from the page
+    error_msgs = []
+    for sel in [".error-message", ".alert", ".errorMsg", ".oci-error",
+                "[class*='error']", "[class*='alert']", "[role='alert']"]:
+        try:
+            elems = page.locator(sel)
+            for i in range(min(elems.count(), 5)):
+                txt = elems.nth(i).inner_text().strip()
+                if txt and len(txt) > 5:
+                    error_msgs.append(txt)
+        except Exception:
+            pass
+
     if any(x in result_text for x in [
         "please correct", "we were unable", "not found", "invalid",
         "unable to locate", "no itinerary", "please try again",
+        "not eligible", "outside", "not available",
     ]):
-        log.warning("Check-in validation error (confirmation not found or not in window)")
         page.screenshot(path=str(SCREENSHOTS_DIR / "04_validation_error.png"))
+        if error_msgs:
+            for msg in error_msgs:
+                log.warning(f"Delta says: {msg}")
+        else:
+            log.warning("Check-in error — check screenshots/04_validation_error.png for details")
+
+        # Hint: if the flight is >24h away, suggest scheduling
+        if any(x in result_text for x in ["not eligible", "outside", "24 hour",
+                                            "not available", "not yet"]):
+            log.info("Hint: check-in may not be open yet. Use -d to schedule: "
+                     "python checkin.py CODE -d 'YYYY-MM-DD HH:MM'")
         return False
 
     # Check for success — passenger selection or boarding pass
