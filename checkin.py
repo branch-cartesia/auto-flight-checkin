@@ -75,7 +75,8 @@ def _setup_browser(playwright, headless=True):
     return browser, context, page
 
 
-def checkin_delta(confirmation: str, first_name: str, last_name: str,
+def checkin_delta(confirmation: str, first_name: str = "", last_name: str = "",
+                  departure_airport: str = "",
                   dry_run: bool = False, headless: bool = True,
                   max_retries: int = 3) -> bool:
     """
@@ -104,7 +105,8 @@ def checkin_delta(confirmation: str, first_name: str, last_name: str,
                 browser, context, page = _setup_browser(p, headless=headless)
                 try:
                     result = _delta_checkin_flow(
-                        page, confirmation, first_name, last_name, dry_run
+                        page, confirmation, first_name, last_name,
+                        departure_airport, dry_run
                     )
                     if result:
                         return True
@@ -124,7 +126,8 @@ def checkin_delta(confirmation: str, first_name: str, last_name: str,
     return False
 
 
-def _delta_checkin_flow(page, confirmation, first_name, last_name, dry_run):
+def _delta_checkin_flow(page, confirmation, first_name, last_name,
+                        departure_airport, dry_run):
     """Execute the Delta check-in flow via PCCOciWeb."""
 
     # Step 1: Build session via homepage (needed for Akamai cookies)
@@ -217,6 +220,32 @@ def _delta_checkin_flow(page, confirmation, first_name, last_name, dry_run):
                 break
         except Exception:
             continue
+
+    # Step 4b: Fill departure airport if provided
+    if departure_airport:
+        airport_selectors = [
+            "#originCity",
+            "input[name='originAirportCode']",
+            "input[placeholder*='Airport']",
+        ]
+        for sel in airport_selectors:
+            try:
+                elem = page.locator(sel)
+                if elem.count() > 0 and elem.first.is_visible(timeout=1000):
+                    elem.first.click()
+                    elem.first.fill(departure_airport.upper())
+                    page.wait_for_timeout(1000)
+                    # Select from autocomplete dropdown if it appears
+                    try:
+                        option = page.locator(f"text={departure_airport.upper()}").first
+                        if option.is_visible(timeout=2000):
+                            option.click()
+                    except Exception:
+                        pass
+                    log.info(f"Filled departure airport: {departure_airport}")
+                    break
+            except Exception:
+                continue
 
     page.screenshot(path=str(SCREENSHOTS_DIR / "02_filled.png"))
 
@@ -382,9 +411,9 @@ def _delta_checkin_flow(page, confirmation, first_name, last_name, dry_run):
 # Scheduling
 # ---------------------------------------------------------------------------
 
-def schedule_checkin(airline: str, confirmation: str, first_name: str,
-                     last_name: str, departure_str: str,
-                     dry_run: bool = False):
+def schedule_checkin(airline: str, confirmation: str, first_name: str = "",
+                     last_name: str = "", departure_str: str = "",
+                     departure_airport: str = "", dry_run: bool = False):
     """Schedule check-in for 24 hours before departure."""
     from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -395,7 +424,8 @@ def schedule_checkin(airline: str, confirmation: str, first_name: str,
     now = datetime.now()
     if checkin_time <= now:
         log.info("Check-in time already passed — running immediately!")
-        run_checkin(airline, confirmation, first_name, last_name, dry_run)
+        run_checkin(airline, confirmation, first_name, last_name,
+                    departure_airport, dry_run)
         return
 
     wait = checkin_time - now
@@ -407,7 +437,8 @@ def schedule_checkin(airline: str, confirmation: str, first_name: str,
     scheduler = BlockingScheduler()
     scheduler.add_job(
         run_checkin, "date", run_date=checkin_time,
-        args=[airline, confirmation, first_name, last_name, dry_run],
+        args=[airline, confirmation, first_name, last_name,
+              departure_airport, dry_run],
     )
     try:
         scheduler.start()
@@ -415,8 +446,9 @@ def schedule_checkin(airline: str, confirmation: str, first_name: str,
         log.info("Scheduler stopped.")
 
 
-def run_checkin(airline: str, confirmation: str, first_name: str,
-                last_name: str, dry_run: bool = False) -> bool:
+def run_checkin(airline: str, confirmation: str, first_name: str = "",
+                last_name: str = "", departure_airport: str = "",
+                dry_run: bool = False) -> bool:
     """Run check-in for the specified airline."""
     if airline.lower() != "delta":
         log.error(f"Unsupported airline: {airline}. Supported: [delta]")
@@ -426,6 +458,7 @@ def run_checkin(airline: str, confirmation: str, first_name: str,
         confirmation=confirmation,
         first_name=first_name,
         last_name=last_name,
+        departure_airport=departure_airport,
         dry_run=dry_run,
         headless=True,
     )
@@ -451,6 +484,8 @@ def main():
                         help="Passenger first name (optional)")
     parser.add_argument("--last-name", default="",
                         help="Passenger last name (optional)")
+    parser.add_argument("--airport", default="",
+                        help="Departure airport code, e.g. JFK, LAX (optional)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Fill form but don't submit")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -464,18 +499,20 @@ def main():
     first_name = args.first_name or config.get("first_name", "")
     last_name = args.last_name or config.get("last_name", "")
     airline = args.airline or config.get("airline", "delta")
+    airport = args.airport or config.get("departure_airport", "")
 
     if args.departure:
         schedule_checkin(
             airline=airline, confirmation=args.confirmation,
             first_name=first_name, last_name=last_name,
-            departure_str=args.departure, dry_run=args.dry_run,
+            departure_str=args.departure, departure_airport=airport,
+            dry_run=args.dry_run,
         )
     else:
         success = run_checkin(
             airline=airline, confirmation=args.confirmation,
             first_name=first_name, last_name=last_name,
-            dry_run=args.dry_run,
+            departure_airport=airport, dry_run=args.dry_run,
         )
         sys.exit(0 if success else 1)
 

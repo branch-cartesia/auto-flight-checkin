@@ -30,6 +30,10 @@ def setup():
         input(f"Default airline [{config.get('airline', 'delta')}]: ").strip()
         or config.get("airline", "delta")
     )
+    config["departure_airport"] = (
+        input(f"Home airport code, e.g. JFK, LAX [{config.get('departure_airport', '')}]: ").strip()
+        or config.get("departure_airport", "")
+    )
 
     CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n")
     print(f"\nSaved to {CONFIG_PATH}")
