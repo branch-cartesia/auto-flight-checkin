@@ -1,0 +1,5 @@
+screenshots/
+__pycache__/
+*.pyc
+.tmp.*
+config.json
