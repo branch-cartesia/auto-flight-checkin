@@ -161,24 +161,33 @@ def _delta_checkin_flow(page, confirmation, first_name, last_name,
 
     log.info("Check-in page loaded successfully")
 
-    # Step 3: Wait for the Angular form to render, then fill confirmation
-    # Wait for the confirmation input to appear (up to 15s)
+    # Step 3: Make sure we're on the Confirmation Number tab
+    # The form has tabs: Confirmation, SkyMiles, Credit Card, E-Ticket.
+    # If we don't click the right tab, we may fill the wrong field.
+    try:
+        conf_tab = page.locator("text=Confirmation Number").first
+        if conf_tab.is_visible(timeout=5000):
+            conf_tab.click()
+            page.wait_for_timeout(500)
+            log.info("Clicked Confirmation Number tab")
+    except Exception:
+        pass  # Tab might already be selected or not exist
+
+    # Step 4: Wait for the confirmation input and fill it
     conf_filled = False
     try:
         page.wait_for_selector("#inputConfirmation, input[name='recordLocator']",
                                state="visible", timeout=15000)
     except Exception:
-        pass  # Fall through to selector loop
+        pass
 
     for sel in [
         "#inputConfirmation",
         "input[name='recordLocator']",
-        "input[name='confirmationNumber']",
-        "#confirmation",
     ]:
         try:
             elem = page.locator(sel)
-            if elem.count() > 0 and elem.first.is_visible(timeout=1000):
+            if elem.count() > 0 and elem.first.is_visible(timeout=2000):
                 elem.first.click()
                 elem.first.fill(confirmation.upper())
                 conf_filled = True
@@ -188,13 +197,14 @@ def _delta_checkin_flow(page, confirmation, first_name, last_name,
             continue
 
     if not conf_filled:
-        # Fallback: try by label
+        # Last resort: find input with placeholder like "SFTORB" (example PNR)
         try:
-            elem = page.get_by_label("Confirmation", exact=False)
-            if elem.count() > 0:
+            elem = page.locator("input[placeholder*='SFTORB'], input[placeholder*='ex.']")
+            if elem.count() > 0 and elem.first.is_visible(timeout=2000):
+                elem.first.click()
                 elem.first.fill(confirmation.upper())
                 conf_filled = True
-                log.info("Filled confirmation by label")
+                log.info("Filled confirmation by placeholder")
         except Exception:
             pass
 
