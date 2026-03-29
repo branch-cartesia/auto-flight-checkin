@@ -173,21 +173,27 @@ def _delta_checkin_flow(page, confirmation, first_name, last_name,
     except Exception:
         pass  # Tab might already be selected or not exist
 
-    # Step 4: Wait for the confirmation input and fill it
+    # Step 4: Wait for ANY input to appear (the Angular app may use different IDs)
     conf_filled = False
     try:
-        page.wait_for_selector("#inputConfirmation, input[name='recordLocator']",
-                               state="visible", timeout=15000)
+        page.wait_for_selector("input:visible", state="visible", timeout=15000)
+        log.info("Form inputs are visible")
     except Exception:
-        pass
+        log.warning("Timed out waiting for form inputs")
 
+    # Try specific selectors first (fast, no long timeouts)
     for sel in [
         "#inputConfirmation",
         "input[name='recordLocator']",
+        "input[name='confirmationNumber']",
+        "#confirmation",
+        "input[placeholder*='SFTORB']",
+        "input[placeholder*='ex.']",
+        "input[placeholder*='onfirm']",
     ]:
         try:
             elem = page.locator(sel)
-            if elem.count() > 0 and elem.first.is_visible(timeout=2000):
+            if elem.count() > 0 and elem.first.is_visible(timeout=500):
                 elem.first.click()
                 elem.first.fill(confirmation.upper())
                 conf_filled = True
@@ -197,20 +203,55 @@ def _delta_checkin_flow(page, confirmation, first_name, last_name,
             continue
 
     if not conf_filled:
-        # Last resort: find input with placeholder like "SFTORB" (example PNR)
+        # Fallback: find the first visible text input that looks like a PNR field
+        # (skip search boxes, checkboxes, hidden fields)
         try:
-            elem = page.locator("input[placeholder*='SFTORB'], input[placeholder*='ex.']")
-            if elem.count() > 0 and elem.first.is_visible(timeout=2000):
-                elem.first.click()
-                elem.first.fill(confirmation.upper())
+            all_inputs = page.locator("input:visible")
+            count = all_inputs.count()
+            log.info(f"Found {count} visible inputs, checking each...")
+            for i in range(min(count, 10)):
+                inp = all_inputs.nth(i)
+                inp_type = inp.get_attribute("type") or "text"
+                inp_id = inp.get_attribute("id") or ""
+                inp_name = inp.get_attribute("name") or ""
+                inp_placeholder = inp.get_attribute("placeholder") or ""
+
+                # Skip non-text inputs
+                if inp_type in ("hidden", "checkbox", "radio", "submit", "button"):
+                    continue
+                # Skip search boxes (flight search, help search)
+                if inp_type == "search" and "airport" not in inp_name.lower():
+                    continue
+
+                # This is likely the confirmation field if it's the first text input
+                # on the check-in form
+                log.info(f"  Trying input[{i}]: id={inp_id} name={inp_name} "
+                         f"placeholder={inp_placeholder}")
+                inp.click()
+                inp.fill(confirmation.upper())
                 conf_filled = True
-                log.info("Filled confirmation by placeholder")
-        except Exception:
-            pass
+                log.info(f"Filled confirmation via input[{i}]")
+                break
+        except Exception as e:
+            log.error(f"Fallback fill failed: {e}")
 
     if not conf_filled:
+        # Debug: dump all visible inputs so we know what's on the page
         page.screenshot(path=str(SCREENSHOTS_DIR / "error_no_conf.png"))
-        log.error("Could not find confirmation number field")
+        log.error("Could not find confirmation number field. Dumping visible inputs:")
+        try:
+            all_inputs = page.locator("input:visible")
+            for i in range(min(all_inputs.count(), 15)):
+                inp = all_inputs.nth(i)
+                attrs = {}
+                for attr in ["id", "name", "type", "placeholder", "aria-label"]:
+                    val = inp.get_attribute(attr)
+                    if val:
+                        attrs[attr] = val[:80]
+                log.error(f"  input[{i}]: {attrs}")
+        except Exception as e:
+            log.error(f"  Could not dump inputs: {e}")
+        log.error("Check screenshots/error_no_conf.png for what the page looks like")
         return False
 
     # Step 4: Fill last name if field exists
